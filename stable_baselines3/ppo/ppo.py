@@ -67,6 +67,9 @@ class PPO(OnPolicyAlgorithm):
 
     def __init__(
         self,
+        # TODO: one does not need to use get_policy_from_name, but rather inject the policy
+        # here is enough
+        # Union means either a string or ActorCriticPolicy
         policy: Union[str, Type[ActorCriticPolicy]],
         env: Union[GymEnv, str],
         learning_rate: Union[float, Schedule] = 3e-4,
@@ -199,7 +202,7 @@ class PPO(OnPolicyAlgorithm):
                 # Re-sample the noise matrix because the log_std has changed
                 if self.use_sde:
                     self.policy.reset_noise(self.batch_size)
-
+                # TODO: values is Q(s, a), log_prob is \pi(s, a)
                 values, log_prob, entropy = self.policy.evaluate_actions(rollout_data.observations, actions)
                 values = values.flatten()
                 # Normalize advantage
@@ -213,9 +216,11 @@ class PPO(OnPolicyAlgorithm):
                 # clipped surrogate loss
                 policy_loss_1 = advantages * ratio
                 policy_loss_2 = advantages * th.clamp(ratio, 1 - clip_range, 1 + clip_range)
+                # TODO: part of the loss
                 policy_loss = -th.min(policy_loss_1, policy_loss_2).mean()
 
                 # Logging
+                # XD: the pg_losses can not be backpropagated
                 pg_losses.append(policy_loss.item())
                 clip_fraction = th.mean((th.abs(ratio - 1) > clip_range).float()).item()
                 clip_fractions.append(clip_fraction)
@@ -230,6 +235,7 @@ class PPO(OnPolicyAlgorithm):
                         values - rollout_data.old_values, -clip_range_vf, clip_range_vf
                     )
                 # Value loss using the TD(gae_lambda) target
+                # TODO: value loss
                 value_loss = F.mse_loss(rollout_data.returns, values_pred)
                 value_losses.append(value_loss.item())
 
@@ -240,8 +246,9 @@ class PPO(OnPolicyAlgorithm):
                 else:
                     entropy_loss = -th.mean(entropy)
 
+                # TODO:
                 entropy_losses.append(entropy_loss.item())
-
+                # TODO:
                 loss = policy_loss + self.ent_coef * entropy_loss + self.vf_coef * value_loss
 
                 # Calculate approximate form of reverse KL Divergence for early stopping

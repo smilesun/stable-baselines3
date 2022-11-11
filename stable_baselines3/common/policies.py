@@ -117,6 +117,7 @@ class BaseModel(nn.Module, ABC):
         """Helper method to create a features extractor."""
         return self.features_extractor_class(self.observation_space, **self.features_extractor_kwargs)
 
+        # TODO: let this function return a tuple
     def extract_features(self, obs: th.Tensor) -> th.Tensor:
         """
         Preprocess the observation if needed and extract features.
@@ -629,6 +630,8 @@ class ActorCriticPolicy(BasePolicy):
         """
         return self.get_distribution(observation).get_actions(deterministic=deterministic)
 
+        # TODO: we need to modify this to return the latent variable from the
+        # domain-generalization feature extractor
     def evaluate_actions(self, obs: th.Tensor, actions: th.Tensor) -> Tuple[th.Tensor, th.Tensor, th.Tensor]:
         """
         Evaluate actions according to the current policy,
@@ -640,6 +643,9 @@ class ActorCriticPolicy(BasePolicy):
             and entropy of the action distribution.
         """
         # Preprocess the observation if needed
+        # TODO: self.extract_features(obs) should return (features, z_d) where z_d is used
+        # to represent purely domain information and z_d should be used in the domain
+        # generalization loss
         features = self.extract_features(obs)
         latent_pi, latent_vf = self.mlp_extractor(features)
         distribution = self._get_action_dist_from_latent(latent_pi)
