@@ -14,8 +14,14 @@ from matplotlib import pyplot as plt
 
 try:
     from torch.utils.tensorboard import SummaryWriter
+    from torch.utils.tensorboard.summary import hparams
 except ImportError:
     SummaryWriter = None
+
+try:
+    from tqdm import tqdm
+except ImportError:
+    tqdm = None
 
 DEBUG = 10
 INFO = 20
@@ -24,7 +30,7 @@ ERROR = 40
 DISABLED = 50
 
 
-class Video(object):
+class Video:
     """
     Video data class storing the video frames and the frame per seconds
 
@@ -37,7 +43,7 @@ class Video(object):
         self.fps = fps
 
 
-class Figure(object):
+class Figure:
     """
     Figure data class storing a matplotlib figure and whether to close the figure after logging it
 
@@ -50,7 +56,7 @@ class Figure(object):
         self.close = close
 
 
-class Image(object):
+class Image:
     """
     Image data class storing an image and data format
 
@@ -63,6 +69,22 @@ class Image(object):
     def __init__(self, image: Union[th.Tensor, np.ndarray, str], dataformats: str):
         self.image = image
         self.dataformats = dataformats
+
+
+class HParam:
+    """
+    Hyperparameter data class storing hyperparameters and metrics in dictionnaries
+
+    :param hparam_dict: key-value pairs of hyperparameters to log
+    :param metric_dict: key-value pairs of metrics to log
+        A non-empty metrics dict is required to display hyperparameters in the corresponding Tensorboard section.
+    """
+
+    def __init__(self, hparam_dict: Dict[str, Union[bool, str, float, int, None]], metric_dict: Dict[str, Union[float, int]]):
+        self.hparam_dict = hparam_dict
+        if not metric_dict:
+            raise Exception("`metric_dict` must not be empty to display hyperparameters to the HPARAMS tensorboard tab.")
+        self.metric_dict = metric_dict
 
 
 class FormatUnsupportedError(NotImplementedError):
@@ -80,13 +102,13 @@ class FormatUnsupportedError(NotImplementedError):
             format_str = f"formats {', '.join(unsupported_formats)} are"
         else:
             format_str = f"format {unsupported_formats[0]} is"
-        super(FormatUnsupportedError, self).__init__(
+        super().__init__(
             f"The {format_str} not supported for the {value_description} value logged.\n"
             f"You can exclude formats via the `exclude` parameter of the logger's `record` function."
         )
 
 
-class KVWriter(object):
+class KVWriter:
     """
     Key Value writer
     """
@@ -108,7 +130,7 @@ class KVWriter(object):
         raise NotImplementedError
 
 
-class SeqWriter(object):
+class SeqWriter:
     """
     sequence writer
     """
@@ -164,6 +186,9 @@ class HumanOutputFormat(KVWriter, SeqWriter):
             elif isinstance(value, Image):
                 raise FormatUnsupportedError(["stdout", "log"], "image")
 
+            elif isinstance(value, HParam):
+                raise FormatUnsupportedError(["stdout", "log"], "hparam")
+
             elif isinstance(value, float):
                 # Align left
                 value_str = f"{value:<8.3g}"
@@ -172,35 +197,41 @@ class HumanOutputFormat(KVWriter, SeqWriter):
 
             if key.find("/") > 0:  # Find tag and add it to the dict
                 tag = key[: key.find("/") + 1]
-                key2str[self._truncate(tag)] = ""
+                key2str[(tag, self._truncate(tag))] = ""
             # Remove tag from key
             if tag is not None and tag in key:
                 key = str("   " + key[len(tag) :])
 
             truncated_key = self._truncate(key)
-            if truncated_key in key2str:
+            if (tag, truncated_key) in key2str:
                 raise ValueError(
                     f"Key '{key}' truncated to '{truncated_key}' that already exists. Consider increasing `max_length`."
                 )
-            key2str[truncated_key] = self._truncate(value_str)
+            key2str[(tag, truncated_key)] = self._truncate(value_str)
 
         # Find max widths
         if len(key2str) == 0:
             warnings.warn("Tried to write empty key-value dict")
             return
         else:
-            key_width = max(map(len, key2str.keys()))
+            tagless_keys = map(lambda x: x[1], key2str.keys())
+            key_width = max(map(len, tagless_keys))
             val_width = max(map(len, key2str.values()))
 
         # Write out the data
         dashes = "-" * (key_width + val_width + 7)
         lines = [dashes]
-        for key, value in key2str.items():
+        for (_, key), value in key2str.items():
             key_space = " " * (key_width - len(key))
             val_space = " " * (val_width - len(value))
             lines.append(f"| {key}{key_space} | {value}{val_space} |")
         lines.append(dashes)
-        self.file.write("\n".join(lines) + "\n")
+
+        if tqdm is not None and hasattr(self.file, "name") and self.file.name == "<stdout>":
+            # Do not mess up with progress bar
+            tqdm.write("\n".join(lines) + "\n", file=sys.stdout, end="")
+        else:
+            self.file.write("\n".join(lines) + "\n")
 
         # Flush the output to the file
         self.file.flush()
@@ -246,12 +277,13 @@ def filter_excluded_keys(
 
 
 class JSONOutputFormat(KVWriter):
-    def __init__(self, filename: str):
-        """
-        log to a file, in the JSON format
+    """
+    Log to a file, in the JSON format
 
-        :param filename: the file to write the log to
-        """
+    :param filename: the file to write the log to
+    """
+
+    def __init__(self, filename: str):
         self.file = open(filename, "wt")
 
     def write(self, key_values: Dict[str, Any], key_excluded: Dict[str, Union[str, Tuple[str, ...]]], step: int = 0) -> None:
@@ -262,6 +294,8 @@ class JSONOutputFormat(KVWriter):
                 raise FormatUnsupportedError(["json"], "figure")
             if isinstance(value, Image):
                 raise FormatUnsupportedError(["json"], "image")
+            if isinstance(value, HParam):
+                raise FormatUnsupportedError(["json"], "hparam")
             if hasattr(value, "dtype"):
                 if value.shape == () or len(value) == 1:
                     # if value is a dimensionless numpy array or of length 1, serialize as a float
@@ -287,13 +321,13 @@ class JSONOutputFormat(KVWriter):
 
 
 class CSVOutputFormat(KVWriter):
+    """
+    Log to a file, in a CSV format
+
+    :param filename: the file to write the log to
+    """
+
     def __init__(self, filename: str):
-        """
-        log to a file, in a CSV format
-
-        :param filename: the file to write the log to
-        """
-
         self.file = open(filename, "w+t")
         self.keys = []
         self.separator = ","
@@ -331,6 +365,9 @@ class CSVOutputFormat(KVWriter):
             elif isinstance(value, Image):
                 raise FormatUnsupportedError(["csv"], "image")
 
+            elif isinstance(value, HParam):
+                raise FormatUnsupportedError(["csv"], "hparam")
+
             elif isinstance(value, str):
                 # escape quotechars by prepending them with another quotechar
                 value = value.replace(self.quotechar, self.quotechar + self.quotechar)
@@ -351,12 +388,13 @@ class CSVOutputFormat(KVWriter):
 
 
 class TensorBoardOutputFormat(KVWriter):
-    def __init__(self, folder: str):
-        """
-        Dumps key/value pairs into TensorBoard's numeric format.
+    """
+    Dumps key/value pairs into TensorBoard's numeric format.
 
-        :param folder: the folder to write the log to
-        """
+    :param folder: the folder to write the log to
+    """
+
+    def __init__(self, folder: str):
         assert SummaryWriter is not None, "tensorboard is not installed, you can use " "pip install tensorboard to do so"
         self.writer = SummaryWriter(log_dir=folder)
 
@@ -385,6 +423,13 @@ class TensorBoardOutputFormat(KVWriter):
 
             if isinstance(value, Image):
                 self.writer.add_image(key, value.image, step, dataformats=value.dataformats)
+
+            if isinstance(value, HParam):
+                # we don't use `self.writer.add_hparams` to have control over the log_dir
+                experiment, session_start_info, session_end_info = hparams(value.hparam_dict, metric_dict=value.metric_dict)
+                self.writer.file_writer.add_summary(experiment)
+                self.writer.file_writer.add_summary(session_start_info)
+                self.writer.file_writer.add_summary(session_end_info)
 
         # Flush the output to the file
         self.writer.flush()
@@ -427,7 +472,7 @@ def make_output_format(_format: str, log_dir: str, log_suffix: str = "") -> KVWr
 # ================================================================
 
 
-class Logger(object):
+class Logger:
     """
     The logger class.
 
@@ -623,7 +668,7 @@ def read_json(filename: str) -> pandas.DataFrame:
     :return: the data in the json
     """
     data = []
-    with open(filename, "rt") as file_handler:
+    with open(filename) as file_handler:
         for line in file_handler:
             data.append(json.loads(line))
     return pandas.DataFrame(data)

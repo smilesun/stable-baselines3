@@ -1,7 +1,10 @@
+import base64
 import io
+import json
 import os
 import pathlib
 import warnings
+import zipfile
 from collections import OrderedDict
 from copy import deepcopy
 
@@ -64,7 +67,7 @@ def test_save_load(tmp_path, model_class):
         model.set_parameters(invalid_object_params, exact_match=False)
 
     # Test that exact_match catches when something was missed.
-    missing_object_params = dict((k, v) for k, v in list(original_params.items())[:-1])
+    missing_object_params = {k: v for k, v in list(original_params.items())[:-1]}
     with pytest.raises(ValueError):
         model.set_parameters(missing_object_params, exact_match=True)
 
@@ -174,6 +177,7 @@ def test_set_env(tmp_path, model_class):
     env = DummyVecEnv([lambda: select_env(model_class)])
     env2 = DummyVecEnv([lambda: select_env(model_class)])
     env3 = select_env(model_class)
+    env4 = DummyVecEnv([lambda: select_env(model_class) for _ in range(2)])
 
     kwargs = {}
     if model_class in {DQN, DDPG, SAC, TD3}:
@@ -199,6 +203,10 @@ def test_set_env(tmp_path, model_class):
     # learn again
     model.learn(total_timesteps=64)
 
+    # num_env must be the same
+    with pytest.raises(AssertionError):
+        model.set_env(env4)
+
     # Keep the same env, disable reset
     model.set_env(model.get_env(), force_reset=False)
     assert model._last_obs is not None
@@ -222,6 +230,11 @@ def test_set_env(tmp_path, model_class):
     assert model._last_obs is None
     model.learn(total_timesteps=64, reset_num_timesteps=False)
     assert model.num_timesteps == 3 * 64
+
+    del model
+    # Load the model with a different number of environments
+    model = model_class.load(tmp_path / "test_save.zip", env=env4)
+    model.learn(total_timesteps=64)
 
     # Clear saved file
     os.remove(tmp_path / "test_save.zip")
@@ -375,6 +388,9 @@ def test_warn_buffer(recwarn, model_class, optimize_memory_usage):
         select_env(model_class),
         buffer_size=100,
         optimize_memory_usage=optimize_memory_usage,
+        # we cannot use optimize_memory_usage and handle_timeout_termination
+        # at the same time
+        replay_buffer_kwargs={"handle_timeout_termination": not optimize_memory_usage},
         policy_kwargs=dict(net_arch=[64]),
         learning_starts=10,
     )
@@ -446,7 +462,7 @@ def test_save_load_policy(tmp_path, model_class, policy_str, use_sde):
     params = deepcopy(policy.state_dict())
 
     # Modify all parameters to be random values
-    random_params = dict((param_name, th.rand_like(param)) for param_name, param in params.items())
+    random_params = {param_name: th.rand_like(param) for param_name, param in params.items()}
 
     # Update model parameters with the new random values
     policy.load_state_dict(random_params)
@@ -537,7 +553,7 @@ def test_save_load_q_net(tmp_path, model_class, policy_str):
     params = deepcopy(q_net.state_dict())
 
     # Modify all parameters to be random values
-    random_params = dict((param_name, th.rand_like(param)) for param_name, param in params.items())
+    random_params = {param_name: th.rand_like(param) for param_name, param in params.items()}
 
     # Update model parameters with the new random values
     q_net.load_state_dict(random_params)
@@ -656,3 +672,54 @@ def test_open_file(tmp_path):
     with pytest.raises(ValueError):
         buff.close()
         open_path(buff, "w")
+
+
+@pytest.mark.expensive
+def test_save_load_large_model(tmp_path):
+    """
+    Test saving and loading a model with a large policy that is greater than 2GB. We
+    test only one algorithm since all algorithms share the same code for loading and
+    saving the model.
+    """
+    env = select_env(TD3)
+    kwargs = dict(policy_kwargs=dict(net_arch=[8192, 8192, 8192]), device="cpu")
+    model = TD3("MlpPolicy", env, **kwargs)
+
+    # test saving
+    model.save(tmp_path / "test_save")
+
+    # test loading
+    model = TD3.load(str(tmp_path / "test_save.zip"), env=env, **kwargs)
+
+    # clear file from os
+    os.remove(tmp_path / "test_save.zip")
+
+
+def test_load_invalid_object(tmp_path):
+    # See GH Issue #1122 for an example
+    # of invalid object loading
+    path = str(tmp_path / "ppo_pendulum.zip")
+    PPO("MlpPolicy", "Pendulum-v1", learning_rate=lambda _: 1.0).save(path)
+
+    with zipfile.ZipFile(path, mode="r") as archive:
+        json_data = json.loads(archive.read("data").decode())
+
+    # Intentionally corrupt the data
+    serialization = json_data["learning_rate"][":serialized:"]
+    base64_object = base64.b64decode(serialization.encode())
+    new_bytes = base64_object.replace(b"CodeType", b"CodeTyps")
+    base64_encoded = base64.b64encode(new_bytes).decode()
+    json_data["learning_rate"][":serialized:"] = base64_encoded
+    serialized_data = json.dumps(json_data, indent=4)
+
+    with open(tmp_path / "data", "w") as f:
+        f.write(serialized_data)
+    # Replace with the corrupted file
+    # probably doesn't work on windows
+    os.system(f"cd {tmp_path}; zip ppo_pendulum.zip data")
+    with pytest.warns(UserWarning, match=r"custom_objects"):
+        PPO.load(path)
+    # Load with custom object, no warnings
+    with warnings.catch_warnings(record=True) as record:
+        PPO.load(path, custom_objects=dict(learning_rate=lambda _: 1.0))
+    assert len(record) == 0

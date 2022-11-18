@@ -8,13 +8,19 @@ import torch as th
 from gym import spaces
 
 import stable_baselines3 as sb3
-from stable_baselines3 import A2C, PPO
+from stable_baselines3 import A2C
 from stable_baselines3.common.atari_wrappers import ClipRewardEnv, MaxAndSkipEnv
 from stable_baselines3.common.env_util import is_wrapped, make_atari_env, make_vec_env, unwrap_wrapper
 from stable_baselines3.common.evaluation import evaluate_policy
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.noise import ActionNoise, OrnsteinUhlenbeckActionNoise, VectorizedActionNoise
-from stable_baselines3.common.utils import get_system_info, is_vectorized_observation, polyak_update, zip_strict
+from stable_baselines3.common.utils import (
+    get_parameters_by_name,
+    get_system_info,
+    is_vectorized_observation,
+    polyak_update,
+    zip_strict,
+)
 from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
 
 
@@ -135,16 +141,18 @@ def test_custom_vec_env(tmp_path):
         make_vec_env("CartPole-v1", n_envs=1, vec_env_kwargs={"dummy": False})
 
 
-def test_evaluate_policy():
+@pytest.mark.parametrize("direct_policy", [False, True])
+def test_evaluate_policy(direct_policy: bool):
     model = A2C("MlpPolicy", "Pendulum-v1", seed=0)
     n_steps_per_episode, n_eval_episodes = 200, 2
-    model.n_callback_calls = 0
 
     def dummy_callback(locals_, _globals):
         locals_["model"].n_callback_calls += 1
 
+    policy = model.policy if direct_policy else model
+    policy.n_callback_calls = 0
     _, episode_lengths = evaluate_policy(
-        model,
+        policy,
         model.get_env(),
         n_eval_episodes,
         deterministic=True,
@@ -156,19 +164,19 @@ def test_evaluate_policy():
 
     n_steps = sum(episode_lengths)
     assert n_steps == n_steps_per_episode * n_eval_episodes
-    assert n_steps == model.n_callback_calls
+    assert n_steps == policy.n_callback_calls
 
     # Reaching a mean reward of zero is impossible with the Pendulum env
     with pytest.raises(AssertionError):
-        evaluate_policy(model, model.get_env(), n_eval_episodes, reward_threshold=0.0)
+        evaluate_policy(policy, model.get_env(), n_eval_episodes, reward_threshold=0.0)
 
-    episode_rewards, _ = evaluate_policy(model, model.get_env(), n_eval_episodes, return_episode_rewards=True)
+    episode_rewards, _ = evaluate_policy(policy, model.get_env(), n_eval_episodes, return_episode_rewards=True)
     assert len(episode_rewards) == n_eval_episodes
 
     # Test that warning is given about no monitor
     eval_env = gym.make("Pendulum-v1")
     with pytest.warns(UserWarning):
-        _ = evaluate_policy(model, eval_env, n_eval_episodes)
+        _ = evaluate_policy(policy, eval_env, n_eval_episodes)
 
 
 class ZeroRewardWrapper(gym.RewardWrapper):
@@ -180,7 +188,7 @@ class AlwaysDoneWrapper(gym.Wrapper):
     # Pretends that environment only has single step for each
     # episode.
     def __init__(self, env):
-        super(AlwaysDoneWrapper, self).__init__(env)
+        super().__init__(env)
         self.last_obs = None
         self.needs_reset = True
 
@@ -322,6 +330,22 @@ def test_vec_noise():
     assert len(vec.noises) == num_envs
 
 
+def test_get_parameters_by_name():
+    model = th.nn.Sequential(th.nn.Linear(5, 5), th.nn.BatchNorm1d(5))
+    # Initialize stats
+    model(th.ones(3, 5))
+    included_names = ["weight", "bias", "running_"]
+    # 2 x weight, 2 x bias, 1 x running_mean, 1 x running_var; Ignore num_batches_tracked.
+    parameters = get_parameters_by_name(model, included_names)
+    assert len(parameters) == 6
+    assert th.allclose(parameters[4], model[1].running_mean)
+    assert th.allclose(parameters[5], model[1].running_var)
+    parameters = get_parameters_by_name(model, ["running_"])
+    assert len(parameters) == 2
+    assert th.allclose(parameters[0], model[1].running_mean)
+    assert th.allclose(parameters[1], model[1].running_var)
+
+
 def test_polyak():
     param1, param2 = th.nn.Parameter(th.ones((5, 5))), th.nn.Parameter(th.zeros((5, 5)))
     target1, target2 = th.nn.Parameter(th.ones((5, 5))), th.nn.Parameter(th.zeros((5, 5)))
@@ -364,19 +388,6 @@ def test_is_wrapped():
     assert is_wrapped(env, Monitor)
     # Test that unwrap works as expected
     assert unwrap_wrapper(env, Monitor) == monitor_env
-
-
-def test_ppo_warnings():
-    """Test that PPO warns and errors correctly on
-    problematic rollour buffer sizes"""
-
-    # Only 1 step: advantage normalization will return NaN
-    with pytest.raises(AssertionError):
-        PPO("MlpPolicy", "Pendulum-v1", n_steps=1)
-
-    # Truncated mini-batch
-    with pytest.warns(UserWarning):
-        PPO("MlpPolicy", "Pendulum-v1", n_steps=6, batch_size=8)
 
 
 def test_get_system_info():

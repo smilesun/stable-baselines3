@@ -27,7 +27,7 @@ That is to say, your environment must implement the following methods (and inher
 
   class CustomEnv(gym.Env):
       """Custom Environment that follows gym interface"""
-      metadata = {'render.modes': ['human']}
+      metadata = {"render.modes": ["human"]}
 
       def __init__(self, arg1, arg2, ...):
           super(CustomEnv, self).__init__()
@@ -45,7 +45,7 @@ That is to say, your environment must implement the following methods (and inher
       def reset(self):
           ...
           return observation  # reward, done, info can't be included
-      def render(self, mode='human'):
+      def render(self, mode="human"):
           ...
       def close (self):
           ...
@@ -58,10 +58,10 @@ Then you can define and train a RL agent with:
   # Instantiate the env
   env = CustomEnv(arg1, ...)
   # Define and Train the agent
-  model = A2C('CnnPolicy', env).learn(total_timesteps=1000)
+  model = A2C("CnnPolicy", env).learn(total_timesteps=1000)
 
 
-To check that your environment follows the gym interface, please use:
+To check that your environment follows the Gym interface that SB3 supports, please use:
 
 .. code-block:: python
 
@@ -71,11 +71,11 @@ To check that your environment follows the gym interface, please use:
 	# It will check your custom environment and output additional warnings if needed
 	check_env(env)
 
-
+Gym also have its own `env checker <https://www.gymlibrary.ml/content/api/#checking-api-conformity>`_ but it checks a superset of what SB3 supports (SB3 does not support all Gym features).
 
 We have created a `colab notebook <https://colab.research.google.com/github/araffin/rl-tutorial-jnrr19/blob/master/5_custom_gym_env.ipynb>`_ for a concrete example on creating a custom environment along with an example of using it with Stable-Baselines3 interface.
 
-Alternatively, you may look at OpenAI Gym `built-in environments <https://gym.openai.com/docs/#available-environments>`_. However, the readers are cautioned as per OpenAI Gym `official wiki <https://github.com/openai/gym/wiki/FAQ>`_, its advised not to customize their built-in environments. It is better to copy and create new ones if you need to modify them.
+Alternatively, you may look at OpenAI Gym `built-in environments <https://www.gymlibrary.ml/>`_. However, the readers are cautioned as per OpenAI Gym `official wiki <https://github.com/openai/gym/wiki/FAQ>`_, its advised not to customize their built-in environments. It is better to copy and create new ones if you need to modify them.
 
 Optionally, you can also register the environment with gym, that will allow you to create the RL agent in one line (and use ``gym.make()`` to instantiate the env):
 
