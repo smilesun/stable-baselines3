@@ -632,7 +632,7 @@ class ActorCriticPolicy(BasePolicy):
         out = self.extract_features(obs)
         ###########TODO:FIXED#############################
         if isinstance(out, tuple):
-            features, z_d = out
+            features, z_d, loss_dg = out
         else:
             features = out
         ########################################
@@ -641,7 +641,8 @@ class ActorCriticPolicy(BasePolicy):
         log_prob = distribution.log_prob(actions)
         values = self.value_net(latent_vf)
         entropy = distribution.entropy()
-        return values, log_prob, entropy
+        # return the domain generalization loss
+        return values, log_prob, entropy, z_d, loss_dg
 
     def get_distribution(self, obs: th.Tensor) -> Distribution:
         """
