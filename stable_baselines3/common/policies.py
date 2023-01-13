@@ -629,7 +629,13 @@ class ActorCriticPolicy(BasePolicy):
         # TODO: self.extract_features(obs) should return (features, z_d) where z_d is used
         # to represent purely domain information and z_d should be used in the domain
         # generalization loss
-        features = self.extract_features(obs)
+        out = self.extract_features(obs)
+        ###########TODO:FIXED#############################
+        if isinstance(out, tuple):
+            features, z_d = out
+        else:
+            features = out
+        ########################################
         latent_pi, latent_vf = self.mlp_extractor(features)
         distribution = self._get_action_dist_from_latent(latent_pi)
         log_prob = distribution.log_prob(actions)
