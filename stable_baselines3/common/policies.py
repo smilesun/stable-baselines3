@@ -124,7 +124,10 @@ class BaseModel(nn.Module):
         """
         assert self.features_extractor is not None, "No features extractor was set"
         preprocessed_obs = preprocess_obs(obs, self.observation_space, normalize_images=self.normalize_images)
-        return self.features_extractor(preprocessed_obs)
+        # TODO: FIXED
+        feature, z_d = self.features_extractor(preprocessed_obs)
+        loss_dg = self.features_extractor.cal_loss(preprocessed_obs)
+        return feature, z_d, loss_dg
 
     def _get_constructor_parameters(self) -> Dict[str, Any]:
         """
