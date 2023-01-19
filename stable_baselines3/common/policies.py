@@ -126,7 +126,7 @@ class BaseModel(nn.Module):
         preprocessed_obs = preprocess_obs(obs, self.observation_space, normalize_images=self.normalize_images)
         # TODO: FIXED
         feature, z_d = self.features_extractor(preprocessed_obs)
-        loss_dg = self.features_extractor.cal_loss(preprocessed_obs)
+        loss_dg = self.features_extractor.cal_loss_dg(preprocessed_obs)
         return feature, z_d, loss_dg
 
     def _get_constructor_parameters(self) -> Dict[str, Any]:
