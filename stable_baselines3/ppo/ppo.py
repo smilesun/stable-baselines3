@@ -208,7 +208,9 @@ class PPO(OnPolicyAlgorithm):
                 if self.use_sde:
                     self.policy.reset_noise(self.batch_size)
                 # TODO: values is Q(s, a), log_prob is \pi(s, a)
-                values, log_prob, entropy = self.policy.evaluate_actions(rollout_data.observations, actions)
+
+                values, log_prob, entropy, z_d, loss_dg = self.policy.evaluate_actions(rollout_data.observations, actions)
+
                 values = values.flatten()
                 # Normalize advantage
                 advantages = rollout_data.advantages
@@ -252,10 +254,12 @@ class PPO(OnPolicyAlgorithm):
                 else:
                     entropy_loss = -th.mean(entropy)
 
+                loss_dg = -th.mean(loss_dg)   # FIXME
+
                 # TODO:
                 entropy_losses.append(entropy_loss.item())
                 # TODO:
-                loss = policy_loss + self.ent_coef * entropy_loss + self.vf_coef * value_loss
+                loss = policy_loss + self.ent_coef * entropy_loss + self.vf_coef * value_loss + loss_dg
 
                 # Calculate approximate form of reverse KL Divergence for early stopping
                 # see issue #417: https://github.com/DLR-RM/stable-baselines3/issues/417
